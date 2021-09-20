@@ -1,0 +1,540 @@
+---
+title: "Homework 5"
+subtitle: "Text Analysis Part II"
+author: "Andrew Knittle"
+date: "`r paste('Generated on', Sys.Date())`" 
+output: 
+  html_document: 
+    # try readable or cosmo
+    # default (default), try kable, tibble, or paged as an option
+    # Options are none (default), show, and hide
+    # default is null, try my_style_file.css
+    toc: TRUE
+    toc_depth: 3
+    toc_float: FALSE
+    highlight: haddock
+    theme: flatly
+    df_print: paged
+    number_sections: TRUE
+    code_folding: none
+    self_contained: TRUE
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+set.seed(123)
+
+# Load all of the libraries that we need for the document.
+library(pacman)
+p_load(ggplot2)
+p_load(ggwordcloud)
+p_load(tm)
+p_load(knitr)
+p_load(SnowballC)
+p_load(wordcloud)
+p_load(tidytext)
+p_load(tibble)
+p_load(rmarkdown)
+p_load(imager)
+p_load(officer)
+p_load(dplyr)
+p_load(stringr)
+p_load(ngram)
+p_load(textstem)
+p_load(tokenizers)
+p_load(kableExtra)
+p_load(hunspell)
+p_load(XML)
+p_load(xml2)
+p_load(rvest)
+p_load(sentimentr)
+
+# Read Data
+setwd("C:/Users/aknit/Documents/Grad School/Data Analytics II/November")
+source("TextAnalysis_SupportFile.R") # Get helper functions to be used in this file
+Frankenstein_OG<-"https://www.gutenberg.org/files/84/84-h/84-h.htm" # Frankenstein book link
+
+# Frankenstein_OG<-"https://www.gutenberg.org/files/41445/41445-h/41445-h.htm" # Alt. Book format
+
+Frankenstein <- read_html(Frankenstein_OG) # Can also use readLines()
+#Frankenstein <- Frankenstein[2] # Remove Meta Data
+
+```
+
+```{css, echo=FALSE}
+
+h1{
+    margin-top: 84px;
+    color: #0a2b18;
+}
+
+h2{
+    margin-top: 84px;
+    color: #1f6031;
+}
+
+h3{
+    color: #2b921c;
+}
+
+h4{
+    color: #46b834;
+}
+
+body {
+    font-family: "Bookman", serif.;
+    color: black;
+}
+a, a:hover {
+    color: 	#46b834;
+}
+pre {
+    font-size: 18px;
+}
+
+```
+
+
+# Frankenstein
+
+**Frankenstein** by *Mary Shelly* is a story of ambition, parenthood, empathy, revenge, and tragidy. The story chronicles the journey of Victor Frankenstein, a medical student from Geneva, as he persues his quest to create life and the consequences that follow. The book is told from three different perspectives: *Frankenstein* who is the central figure of the book, *The Monster* Frankensein's creation, and *Captain Robert Walton* who literaly bookends the story. 
+
+This project will be doing Text Analysis on the book as a whole and each character's Point of View (POV). It will be interesting to see the word usage from observing the book as a whole as well as each character's perspective to see if there are dramatic differences in vocabullary. 
+
+
+## Parsing and Web Scraping
+
+In order to even perform Text Analysis we need the actual text. I've pulled text from [The Gutenberg Project](https://www.gutenberg.org/files/84/84-h/84-h.htm), a site dedicated to providing free e-books online for anyone who's interested. 
+
+The key to this project is not only to be able to parse the book, but also to be able to keep the structure of the book such as the chapters. To do this I took note of where the chapters were located in the text by looking for h2 tags. I would then find what lines contained these chapter titles and segment the entire book between these tags. I utilized a helper script file, *TextAnalysis_SupportFile.R*, that does a lot of the heavy lifting and that I utilize throughout this project.
+
+Once I was able to collect the book into a large list of strings, where each index represented a chapter, I was able to make subsets of the book that represented the three different POV's in the book; **Frankenstein, The Monster,** and **The Captain.**
+
+### IMPORTANT UPDATE AS OF 11/14/20
+
+You will notice that the webpage I listed has some metadata at the top of the page. A very important piece of information is "**[Most recently updated: November 13, 2020]**". This update broke my parser which cost me nearly a day to fix; this cost me valuable time that I was hoping to use to explore **Sentiment Analysis** and other works of *Shelly*. Due to this I've limited the my scope of this project.
+
+```{r Get Chapters, echo=FALSE, fig.cap= "Get Chapters", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+# Every <h3> (UPDATE: <h2> as of 11/14/20) tag corresponds to a chapter
+## translate the text into nodes (like a, p, head, etc.)
+chaptersFrankenstein <- html_nodes(Frankenstein,"h2") #%>%
+  # html_text()
+
+# Get Chapter/Letter names
+#chaptersFrankenstein <- gsub("(\\r\\n)", "", chaptersFrankenstein)
+chaptersFrankenstein <- chaptersFrankenstein[-c(1)]
+
+# Get Each line of the page
+linesFrankenstein <- readLines(Frankenstein_OG)
+
+# Because Gutenberg decided to be asshats and ruin my perfect parser by changing 
+# their styling of their website I've had to directly remove some lines
+tableOfContents <- 1:290
+linesFrankenstein <- linesFrankenstein[-tableOfContents]
+
+
+# Get Lines Numbers for the start of each chapter
+chapterLineNum <- as.numeric(linesFrankenstein %in% gsub("[\r\n]", "", chaptersFrankenstein))
+chapterLineNum <- which(chapterLineNum %in% c(1))
+# Add last line to make reading chapters work
+# NOTE: I had to manualy find the last line of the book
+chapterLineNum <- c(chapterLineNum, 8816)
+
+
+# Get the book of Frankenstein broken up into chapters in a list
+fBook <-getBookText(linesFrankenstein, chapterLineNum)
+victorPOVBook <- fBook[c(5:14,21:27)]
+monsterPOVBook <- fBook[c(15:20)]
+captainPOVBook <- fBook[c(1:4,28)]
+```
+
+## Text Analysis
+
+
+
+### Most Used Words
+
+```{r Analyze Word Usage, echo=FALSE, fig.cap= "Analyze Word Usage", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+# Get Token words from Frankenstein and Remove token words
+# remove words that are deemed useless (These are found after running this a few times)
+# also fix words that get stuck together (These are found after running this a few times)
+bannedWords <- c("ldquo", "rdquo", "rsquo", "mdash", "nbsp", "lsquo", " s ", " m ", "3to")
+fixComboWords <- list(c("notsee", "not see"), c("goodspirits", "good spirits"), c("thefloating", "the floating"), c("dangersof", "dangers of"), 
+                      c("advancedon", "advanced on"), c("onits", "on its"),  c("ofsummer", "of summer"),  c("desireto", "desire to"), 
+                      c("notexpected", "not expected"), c("aletter", "a letter"), c("theinstrument", "the instrument"), c("mythoughts", "my thoughts"),
+                      c("onlythrough", "only through"), c("thismanuscript", "this manuscript"), c("otherwisedelirium", "otherwise delirium"), 
+                      c("littleboat", "little boat"), c("notbe", "not be"), c("indeedperceptibly", "indeed perceptibly"), 
+                      c("withdifficulty", "with difficulty"), c("imay", "i may"), c("fiendenter", "fiend enter"), c("yourlove", "your love"), 
+                      c("thefew", "the few"), c("disgracemarked", "disgrace marked"), c("ileave", "i leave"), c("anymoon", "any moon"), 
+                      c("moreinteresting", "more interesting"), c("wehave", "we have"))
+
+fBook.NoStop <- parserFunc(fBook, noStopWords = TRUE, noNumbers = FALSE, 
+                       noPunc = TRUE, noSingleChar = FALSE, noEnglish = FALSE, stripSpace = TRUE, bannedWords = bannedWords, fixComboWords = fixComboWords)
+tokenF <- str_split(fBook.NoStop, pattern = " ")
+wordsF <- unlist(tokenF)
+
+# remove words that are deemed useless
+wordsF <- wordsF[!(wordsF %in% bannedWords)]
+
+# get most used words
+wordStatsF <- frequentWords(wordsF)
+kable(head(wordStatsF, 20) )%>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+```
+
+
+We see from looking at the top most used words in the book that there are some obvious themes: Identity, Family, and Life. All three of these themes can be wrapped up in a larger theme of **Empathy.**
+
+The words "one", "man", "mind" are used primarly to create an *Identity* of a character. Who are they? What do they value? What are there personalities, drives, and ambitions? 
+
+"Father" and "Elizabeth" are referring to Victor's Father, Alphonse Frankenstein, and Elizabeth Lavenza, Victor's adopted sister and wife (it was 1818 so go figure). The Frankenstein Family is very important to Victor as it becomes his goal to protect his family from the "monster" he created. Whenever someone in the family dies from the creature the tragidy it creates ripples and tears through the family with devastating effect; Shelly's life was also filled with tragedy and loss so making parallels between author's family tragedy and her characters' is plain to see. One very interesting note: the monster **NEVER** calls Victor Frankenstein "Father" (I read the book to prep for this project), the monster only ever refers to him as "creator" which is more reverant placeholder for "Father".
+
+"Eyes" and "Life" are the words that best fall under the, well, Life category. The usage of the words "life" is most commonly used to describe as a remarkable gift as well as unending burden that many characters fail to carry. "Eyes" are often described as windows of the soul for good reason, they are what we use to observe the world and to visually connect with others. The Monster's "watery eyes" is one of the key features that makes Victor horrified of what he created when they open, and the same eyes that this essentially newborn uses to observe this new world to him.
+
+Words that I thought would be more prevelant going into this analysis was words focused on Death, but the closest word that would fall under that category is "night". Words like "death" are sparingly used in the book. When people die in the book they're mostly described as "lifeless"; this may have been the author viewing death as more of an absence of life than a state of being. 
+
+Some words that are miscaleneous are words like "might" which in the book is often used to describe possible events and to physical strength of individuals, this is also similar for the word "will".
+
+### N-Grams
+
+```{r N Grams 2, echo=FALSE, fig.cap= "N-grams: Length 2", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+# Show N-grams of length 2
+allF <- concatenate(tokenF)
+ngram2F <- ngram(allF, 2, sep = " ")
+kable(head(get.phrasetable(ngram2F), 20)) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+There is a lot to disect here, but I'll focus on some of the more important 2-Grams:
+
+* "old man" is often a place holder for Victor's Father, and other fatherly figures. Seeing how often "Father" was used earlier this isn't all that surpising. This is in contrast with lesser used term "young man" which is manily used to describe innocense 
+
+* "native country" is said a lot through the book, as home is very important to characters as that's where their family resides. Victor for example misses Geneva a lot through out the book and is often homesick until the end where it only reminds him of heartbreak.
+
+* "dear victor" is often used as the opening to letters addressed to Victor. Most of the letters are from Elizabeth, who as mentioned earlier is very important to Frankenstein.
+
+* "natural philosophy" is used almost entirely in place of the word "science". "Science" is said occasionally through out the book, but back in 1818 it probably wasn't used as much as commonly as "natural philosophy". This is quite ironic considering this is the first major example of science fiction ever written.
+
+* "mr kirwin", "de lacey" are names of characters in the book. Mr Kirwin is the magistrate who accuses Victor for murder, and De Lacey is the bling old man who the monster tries to befriend. 
+
+* "mont blanc" is very important to Victor as it is the mountain that represents home to him as well as the first place the Victor and The Monster confront each other.
+
+
+```{r N Grams 3, echo=FALSE, fig.cap= "N-grams: Length 3", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+# Show N-grams of length 3
+allF <- concatenate(tokenF)
+ngram3F <- ngram(allF, 3, sep = " ")
+kable(head(get.phrasetable(ngram3F), 20)) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+By the nature of 3-Grams the frequency of each phrase is much smaller than the 2-Grams:
+
+* Similary to "dear victor" "mrs saville england" is the opening of the 4 letters sent by Captain Robert Walton at the beginning of the book.
+
+* There are refrences used to describe Victor's home or his arrival of home such as "return native country" and "surrounded mountains ice". Geneva is located in Switzerland, which is known for being mountainous and snowy.
+
+* Frankenstein's story spans around 6 years and this can be seen by usage of "summer passed away", "nearly two months", "since left us", and "six years passed".
+
+* This was a horror novel in 1818 and you can see that with the 3-Grams "figure man distance", "hour state mind", "fiend grasp neck". Though their usage is very low you can tell that this book is haunted by mystery, tension, and violence.
+
+### TF-IDF
+
+```{r TF-IDF, echo=FALSE, fig.cap= "TF-IDF", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+# Get TF for Shark data
+tf.idfFrank <- getTF_IDF(tokenF)
+kable(head(tf.idfFrank, 20)) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+From observing the **TF-IDF** scores I would disagree on some of these words indeed being important. [In short](https://www.onely.com/blog/what-is-tf-idf/#:~:text=Put%20simply%2C%20the%20higher%20the,it%20appears%20in%20the%20document.) the higher the TF-IDF score the more important that word is. The words I would disagree with are: "gales", "latitude", "renovating", "stiff", and "springing".
+
+However, the rest of the scores I would say are pretty accurate especially "felix", "turk", and "safie". Felix is the son of the blind man living in the cottage I mentioned earlier, and Safie is the Turkish woman that Felix proposes to. The Monster learns about the world from observing Felix and Safie, and it's their relationship to each other that gives The Monster the idea to ask Victor to make him a wife.
+
+I would say the rest of the words are only of marginally significance. "england" is visited durring Victor's travels and where the Captain is from. "voyage" likely refers to the Voyage that the Captain is on to explore the Arctic. Most of the words really only have high scores from two chapters by looking at their individual total_words, so it seems there maybe some accidental weight boosting going on.
+
+
+### Visuals
+
+Below are some visual represnentations of data presented earlier.
+
+
+```{r cloud plot, echo=FALSE, fig.cap= "Cloud Plot", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+cloudBuilder(wordStatsF, lowColor = "#0a2b18", highColor = "#46b834")
+```
+
+```{r bar plot, echo=FALSE, fig.cap= "Bar Plot", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+buildBar(wordStatsF, lowColor = "#0a2b18", highColor = "#46b834")
+```
+
+***
+
+# From Victor Frankenstein's POV
+
+Victor Frankenstein narates the Chapters 1-10 and 17-23. We will perform the same analysis as before but only looking at the chapters he speaks in.
+
+## Text Analysis
+
+### Most Used Words
+
+```{r Analyze Word Usage Victor POV, echo=FALSE, fig.cap= "Analyze Word Usage: Victor POV", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+victorBook.NoStop <- parserFunc(victorPOVBook, noStopWords = TRUE, noNumbers = FALSE, 
+                       noPunc = TRUE, noSingleChar = FALSE, noEnglish = FALSE, stripSpace = TRUE, bannedWords, fixComboWords)
+tokenV <- str_split(victorBook.NoStop, pattern = " ")
+wordsV <- unlist(tokenV)
+
+wordsV <- wordsV[!(wordsV %in% bannedWords)]
+
+# get most used words
+wordStatsV <- frequentWords(wordsV)
+kable(head(wordStatsV, 20)) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+```
+
+Many of the words here are centered around life and family. "Elizabeth" is higher now when looking at just Frankenstien's POV chapters, which mankes sense since she is the love of his life. "Father" is still on high on the count since again Frankenstein often thinks of his family. 
+
+I'm somewhat surprised that there are no negative words in this count, given he is the one who narrates his tragedy.
+
+### N-Grams
+
+```{r N Grams 2 Victor POV, echo=FALSE, fig.cap= "Victor POV N-grams: Length 2", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+# Show N-grams of length 2
+allV <- concatenate(tokenV)
+ngram2V <- ngram(allV, 2, sep = " ")
+kable(head(get.phrasetable(ngram2V), 20))%>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+There are some familiar 2-Grams here like "Mr Kirwin", "Dear Victor", and "Natural Philosophy". However, we also get more emphasis on the passage of time and death. This goes back to my expectation previously for the word counts which seems to be more present with 2-Grams. The passage of time checks out because Frankenstein's narration covers over six years. 
+
+
+```{r N Grams 3 Victor POV, echo=FALSE, fig.cap= "Victor POV N-grams: Length 3", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+# Show N-grams of length 2
+allV <- concatenate(tokenV)
+ngram3V <- ngram(allV, 3, sep = " ")
+kable(head(get.phrasetable(ngram3V), 20))%>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+The 3-Grams give much more attention to "Kirwin". This is likely because Victor is interogated by him over the course of several chapters. We also see much more painful descriptions now; it seems that for every increase n-Grams the more detailed descriptions of negative emotions are present. Granted the frequency of all these 3-Grams is no more than 2 so everything should be considered with a grain of salt.
+
+### TF-IDF
+
+```{r TF-IDF Victor, echo=FALSE, fig.cap= "Victor TF-IDF", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+# Get TF for Shark data
+tf.idfVictor <- getTF_IDF(tokenV)
+kable(head(tf.idfVictor, 20))%>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+This time I would say the TF-IDF does a much better job! Throughout Frankenstein's journeys he is confronted by actions of his creation and feels guilty about it. "Justine" for example is falsly chared for the mruder of Victor's kid brother. Despite being "innocent" she provides a false "confession". We see words that are associated with innocence and vows/convictions, which very much fits into Frankenstein 
+
+We also see words associated with science and education.
+
+The only words I would say are not that important are "thy", "italy", "mr" (seems to be tied to Kirwin), "thou", "lady", and "thee".
+
+
+### Visuals
+
+Below are some visual represnentations of data presented earlier.
+
+```{r cloud plot Victor, echo=FALSE, fig.cap= "Victor Cloud Plot", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+cloudBuilder(wordStatsV, lowColor = "#0a2b18", highColor = "#46b834")
+```
+
+```{r bar plot Victor, echo=FALSE, fig.cap= "Victor Bar Plot", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+buildBar(wordStatsV, lowColor = "#0a2b18", highColor = "#46b834")
+```
+
+
+
+
+***
+
+
+# From The Monster's POV
+
+The Monster narrates Chapters 11-16 and we get to see his perspective on the world. Despite many adaptions of The Monster he is very intelligent and articulate, as we see from the analysis.
+
+
+## Text Analysis
+
+### Most Used Words
+
+```{r Analyze Word Usage Monster POV, echo=FALSE, fig.cap= "Analyze Word Usage: Monster POV", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+monsterBook.NoStop <- parserFunc(monsterPOVBook, noStopWords = TRUE, noNumbers = FALSE, 
+                       noPunc = TRUE, noSingleChar = FALSE, noEnglish = FALSE, stripSpace = TRUE, bannedWords, fixComboWords)
+tokenM <- str_split(monsterBook.NoStop, pattern = " ")
+wordsM <- unlist(tokenM)
+
+wordsM <- wordsM[!(wordsM %in% bannedWords)]
+
+# get most used words
+wordStatsM <- frequentWords(wordsM)
+kable(head(wordStatsM, 20))%>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+```
+
+
+The most common words here are when The Monster is spending time observing the family that lives in the cottage; which includes "felix", "safie", the "old" "man", and "agatha". The Monster also tries to help the "cottagers" by providing them "wood" for building.
+
+The Monster also has to pay attention to when he ventures out in public or travels. We can see this with the word usage of "night", "day", and "sun". 
+
+A word that is pretty important that's at the bottom of the list is "fire". Much like the subtitle of the book, "Modern Prometheus", The Monster really starts to learn about the world when he discovers fire left behind by someone's camp.
+
+### N-Grams
+
+```{r N Grams 2 Monster POV, echo=FALSE, fig.cap= "Monster POV N-grams: Length 2", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+# Show N-grams of length 2
+allM <- concatenate(tokenM)
+ngram2M <- ngram(allM, 2, sep = " ")
+kable(head(get.phrasetable(ngram2M), 20))%>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+We can see from the 2-Grams that The Monster views humanity with reverance. He sees them as "lovely creatures". The usage of the "old man", who's name is "De Lacey", is the person he most wants to connect to, and is the first person he introduces himself to. 
+
+After being rejected and scared of humanity he is forced to hide and be miserable, which can also be seen again in the 2-Grams.
+ 
+
+```{r N Grams 3 Monster POV, echo=FALSE, fig.cap= "Monster POV N-grams: Length 3", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+# Show N-grams of length 2
+allM <- concatenate(tokenM)
+ngram3M <- ngram(allM, 3, sep = " ")
+kable(head(get.phrasetable(ngram3M), 20))%>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+The 3-Grams related to the cottage family makes sense as he talks about them a lot and is probably why they're higher than 1 in frequency.
+
+While we only have a frequency count of 1 we can still see much of The Monsters emotional side and his connection to nature (he's vegetarian). We also see how much pain he's in.
+
+### TF-IDF
+
+```{r TF-IDF Monster, echo=FALSE, fig.cap= "Monster TF-IDF", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+# Get TF-IDF for Monster data
+tf.idfMonster <- getTF_IDF(tokenM)
+kable(head(tf.idfMonster, 20))%>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+The TF-IDF does a great job here! The words picked out here revolve around The Monster's time observing the family in the cottage and their troubles in "paris" "france" after trying to help a "turk" family avoid "prison". The words also show The Monster's emotions and his quest of "revenge" against his creator, while also trying to find safety and escaping several scrapes. Overall the scores here are the best yet of a POV.
+
+
+### Visuals
+
+Below are some visual represnentations of data presented earlier.
+
+```{r cloud plot Monster, echo=FALSE, fig.cap= "Monster Cloud Plot", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+cloudBuilder(wordStatsM, lowColor = "#0a2b18", highColor = "#46b834")
+```
+
+```{r bar plot Monster, echo=FALSE, fig.cap= "Monster Bar Plot", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+buildBar(wordStatsM, lowColor = "#0a2b18", highColor = "#46b834")
+```
+
+
+
+
+
+
+***
+
+
+# From Captain Robert Walton's POV
+
+The Letters 1-4 and the final chapter, Chapter 24, are narrated by Captain Robert Walton. 
+
+His presence in the book is brief but very important. He is the one who finds Frankenstein lost in the Arctic, listens to his story, and is there at the end when Frankenstein dies and encounters The Monster.
+
+
+## Text Analysis
+
+### Most Used Words
+
+```{r Analyze Word Usage Captain POV, echo=FALSE, fig.cap= "Analyze Word Usage: Captain POV", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+captainBook.NoStop <- parserFunc(captainPOVBook, noStopWords = TRUE, noNumbers = FALSE, 
+                       noPunc = TRUE, noSingleChar = FALSE, noEnglish = FALSE, stripSpace = TRUE, bannedWords, fixComboWords)
+tokenC <- str_split(captainBook.NoStop, pattern = " ")
+wordsC <- unlist(tokenC)
+
+wordsC <- wordsC[!(wordsC %in% bannedWords)]
+
+# get most used words
+wordStatsC <- frequentWords(wordsC)
+kable(head(wordStatsC, 20)) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+```
+
+The word usage here does an ok job of showing The Captain's time at sea while he writes to his sister back in England. He's lonely not having another intellectual to talk to while being surrounded by ice, so most of the words above do give some indecation towards that.
+
+### N-Grams
+
+```{r N Grams 2 Captain POV, echo=FALSE, fig.cap= "Captain POV N-grams: Length 2", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+# Show N-grams of length 2
+allC <- concatenate(tokenC)
+ngram2C <- ngram(allC, 2, sep = " ")
+kable(head(get.phrasetable(ngram2C), 20))%>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+The 2-Grams pick up phrases that The Captain uses to describe his current status to his "dear sister (margaret saville)", he is generally hopeful and similar to Victor before he creates The Monster. You can also see how he refers to Frankenstein as his "unfortunate guest". 
+
+```{r N Grams 3 Captain POV, echo=FALSE, fig.cap= "Captain POV N-grams: Length 3", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+# Show N-grams of length 3
+allC <- concatenate(tokenC)
+ngram3C <- ngram(allC, 3, sep = " ")
+kable(head(get.phrasetable(ngram3C), 20))%>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+The 3-Grams here are not too enlightening because most of them only have a count of 1, but overall the selection here is much darker. You can see it with "surrounded mountains ice", "death dare ask", "insatiable thirst vengeance", downward full heart", and "safety come back". It does make sense to see more perilous phrases since they are exploring a dangerous part of the Arctic, and the last chapter which Captain Robert is the narrator is very bleak. 
+
+### TF-IDF
+
+```{r TF-IDF Captain, echo=FALSE, fig.cap= "Captain TF-IDF", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+# Get TF-IDF for Captain data
+tf.idfCaptain <- getTF_IDF(tokenC)
+kable(head(tf.idfCaptain, 20))%>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+
+The TF-IDF does a pretty good job again. Most of the words here describe the Arctic landscape the Captain is trapped in, while trying to still be brave for his crew and sister, all while being homesick for England.
+
+### Visuals
+
+Below are some visual represnentations of data presented earlier.
+
+```{r cloud plot Captain, echo=FALSE, fig.cap= "Captain Cloud Plot", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+cloudBuilder(wordStatsC, lowColor = "#0a2b18", highColor = "#46b834")
+```
+
+```{r bar plot Captain, echo=FALSE, fig.cap= "Captain Bar Plot", out.height="100%", out.width="100%", warning=FALSE, comment=FALSE, warning=FALSE}
+buildBar(wordStatsC, lowColor = "#0a2b18", highColor = "#46b834")
+```
+
+# Conclusion
+
+From doing this analysis I've determined each narrator in the book has different word choice and focuses on different aspects of the themes mentioned earlier. Victor is more family and ambition focused, The Monster is an innocent creature and wants to be part of humanity despite being shunned by it, and The Captain is someone desperate to have company in an abysmal wasteland. There is some overlap with some words, but that's likely due to the author wanting to relate an underlying theme.
+
+It's also somewhat apparent that certain POV's somewhat skewed the overall analysis of the book. Most of the word counts and n-Grams were very similar to the ones found in Victor Frankenstein's POV which isn't exactly surprising since the book is named after him. Breaking the book up by narrator really helped gain insight into how each character was different from one another.
+
+## Further Work
+
+I would like to apply what I've done here to other books by *Mary Shelly* but given how unstable the Gutenberg's style by being constantly updated that would've been a nightmare to make sure a parser could be consistent across the site. It would probably be best to download the html files and analize them locally instead.
+
+
+I would also like to explore sentiment analysis the same way I explored text analysis, as it would've been very interesting to see if the intent of the narrator changes by chapter.
+
+## Appendix
+
+To see all helper methods used to perform the web scraping, analysis, and graph generation please see the file *TextAnalysis_SupportFile.R*. Documentation on how to use each method and how it works will be there as well. 
+
+
+
+
